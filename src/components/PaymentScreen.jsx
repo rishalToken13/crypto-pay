@@ -36,6 +36,7 @@ export default function PaymentScreen() {
   const [log, setLog] = useState("");
   const [wallet, setWallet] = useState(null);
   const [order, setOrder] = useState(null);
+  const [paymentStatus, setPaymentStatus] = useState("IDLE");
 
   function logMsg(msg) {
     setLog((l) => (l ? l + "\n" + msg : msg));
@@ -71,6 +72,7 @@ export default function PaymentScreen() {
 
     try {
       setBusy(true);
+      setPaymentStatus("PROCESSING");
       setLog("");
 
       if (validationError) {
@@ -141,10 +143,18 @@ export default function PaymentScreen() {
         invoice_id: order.invoiceId,
       });
 
+        if (finalStatus === "SUCCESS") {
+          setPaymentStatus("SUCCESS");
+          logMsg("🎉 Payment successful!");
+        } else {
+          setPaymentStatus("FAILED");
+        }
+
       logMsg("✅ Backend updated:");
       logMsg(JSON.stringify(updated, null, 2));
     } catch (err) {
       console.error(err);
+      setPaymentStatus("FAILED");
       logMsg(`❌ Error: ${err?.message || String(err)}`);
     } finally {
       setBusy(false);
@@ -205,20 +215,29 @@ export default function PaymentScreen() {
         <button disabled style={{ opacity: 0.5 }}>
           Pay with Card
         </button>
-
+        
         <button
           onClick={handlePayWithCrypto}
-          disabled={busy || !!validationError}
+          disabled={busy || !!validationError || paymentStatus === "SUCCESS"}
           style={{
-            background: "#111",
+            background:
+              paymentStatus === "SUCCESS" ? "#16a34a" : "#111",
             color: "#fff",
             padding: "10px 16px",
-            cursor: busy ? "not-allowed" : "pointer",
+            cursor:
+              busy || paymentStatus === "SUCCESS"
+                ? "not-allowed"
+                : "pointer",
             opacity: busy || validationError ? 0.6 : 1,
           }}
         >
-          {busy ? "Processing..." : "Pay with Crypto"}
+          {paymentStatus === "SUCCESS"
+            ? "Paid ✅"
+            : busy
+            ? "Processing..."
+            : "Pay with Crypto"}
         </button>
+        
       </div>
 
       {/* Log */}
