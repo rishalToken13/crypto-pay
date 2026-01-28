@@ -10,6 +10,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "html5-qrcode": "^2.3.8",
+    "jsqr": "^1.4.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
   },

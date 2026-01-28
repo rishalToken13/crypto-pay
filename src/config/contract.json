@@ -714,10 +714,10 @@
             "type": "function"
         }
     ],
-    "MerchantRegistryV1_ADDRESS": "417e842ebf0ecfaec6fb90776f969383d8d2c65b55",
-    "MerchantRegistryV1_IMPL_ADDRESS": "41cbdb6731bc483e95a2d8b2a8d7963e58eb825f5b",
-    "MerchantRegistryV1_ADDRESS_TRON": "TMWAVSMJPxULZfdfUxUa9WChBYv7UBavz1",
-    "MerchantRegistryV1_IMPL_TRON": "TUZ71PtNmppSa716wfHM3bWGKG759FMqns",
+    "MerchantRegistryV1_ADDRESS": "412e8e3435e1f9b716d9f1ab5bf4b0c7d76f19cca6",
+    "MerchantRegistryV1_IMPL_ADDRESS": "41e69edde8129b81fdee67773b32a6d43f50a14646",
+    "MerchantRegistryV1_ADDRESS_TRON": "TEDNSPNzqFrNzgug8H5GT9oN5bHReMFBsh",
+    "MerchantRegistryV1_IMPL_TRON": "TWzcjSVXJ9y9xP1tU8LKqrVVhbx3Xjkj4p",
     "PaymentCoreV1_ABI": [
         {
             "inputs": [],
@@ -1117,6 +1117,50 @@
             "type": "function"
         },
         {
+            "inputs": [
+                {
+                    "internalType": "bytes32",
+                    "name": "merchantId",
+                    "type": "bytes32"
+                },
+                {
+                    "internalType": "bytes32",
+                    "name": "orderId",
+                    "type": "bytes32"
+                },
+                {
+                    "internalType": "bytes32",
+                    "name": "invoiceId",
+                    "type": "bytes32"
+                },
+                {
+                    "internalType": "address",
+                    "name": "paymentToken",
+                    "type": "address"
+                },
+                {
+                    "internalType": "uint256",
+                    "name": "amount",
+                    "type": "uint256"
+                },
+                {
+                    "internalType": "uint256",
+                    "name": "deadline",
+                    "type": "uint256"
+                }
+            ],
+            "name": "getPaymentDigest",
+            "outputs": [
+                {
+                    "internalType": "bytes32",
+                    "name": "",
+                    "type": "bytes32"
+                }
+            ],
+            "stateMutability": "view",
+            "type": "function"
+        },
+        {
             "inputs": [],
             "name": "getPlatformCommissionConfig",
             "outputs": [
@@ -1293,6 +1337,16 @@
                     "internalType": "uint256",
                     "name": "_amount",
                     "type": "uint256"
+                },
+                {
+                    "internalType": "uint256",
+                    "name": "_deadline",
+                    "type": "uint256"
+                },
+                {
+                    "internalType": "bytes",
+                    "name": "_managerSig",
+                    "type": "bytes"
                 }
             ],
             "name": "payTx",
@@ -1465,12 +1519,12 @@
             "type": "function"
         }
     ],
-    "PaymentCoreV1_ADDRESS": "41d2426c3f5a7bb0ea780de76312bb16fe504d70e5",
-    "PaymentCoreV1_IMPL_ADDRESS": "414343a14c5c9f27236371f835eda8c09085960ac5",
-    "PaymentCoreV1_ADDRESS_TRON": "TV8xUUzCbja6UmP17Lhs4V4MxZ1hpcCUrG",
-    "PaymentCoreV1_IMPL_TRON": "TG6sHvyRA5ojhWTc8UxdNcrcrpiJQDzmaH",
-    "PaymentCoreV1_MERCHANT_REGISTRY_TRON": "TMWAVSMJPxULZfdfUxUa9WChBYv7UBavz1",
-    "PaymentCoreV1_MERCHANT_REGISTRY_HEX": "417e842ebf0ecfaec6fb90776f969383d8d2c65b55",
+    "PaymentCoreV1_ADDRESS": "411e1b841ff800765da10b1946eb35dabec5aecdda",
+    "PaymentCoreV1_IMPL_ADDRESS": "414f7a18df74f825a7468a6e7afd70a5d6cae82474",
+    "PaymentCoreV1_ADDRESS_TRON": "TCiQEfdrxiTdC4xuhvhr9Ns4wAXn8uXurD",
+    "PaymentCoreV1_IMPL_TRON": "THDSefzAaYiMC55XJWhQpnyHZ8LzZ6QtAb",
+    "PaymentCoreV1_MERCHANT_REGISTRY_TRON": "TEDNSPNzqFrNzgug8H5GT9oN5bHReMFBsh",
+    "PaymentCoreV1_MERCHANT_REGISTRY_HEX": "412e8e3435e1f9b716d9f1ab5bf4b0c7d76f19cca6",
     "TRC_20_ABI": [
         {
             "constant": true,
