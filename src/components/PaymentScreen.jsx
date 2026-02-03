@@ -1,267 +1,144 @@
 // src/components/PaymentScreen.jsx
-import { useEffect, useMemo, useRef, useState } from "react";
-import { PAYMENT, NETWORK } from "@/config";
+import { useEffect, useMemo, useState } from "react";
+import { useParams } from "react-router-dom";
+import { PAYMENT, USDT, NETWORK } from "@/config";
 import { connectTronLink, getContract, assertNetwork, shortAddr } from "@/lib/tron";
 import { toTokenUnits } from "@/lib/units";
 import { waitForTxResult } from "@/lib/tronHttp";
-
-/**
- * QR must include:
- * merchantId, orderId, invoiceId, amount, token, deadline, signature
- *
- * IMPORTANT:
- * - `token` in QR is ALWAYS the TRC20 token ADDRESS (base58, starts with "T")
- * - This page uses that address for:
- *    - reading decimals()
- *    - allowance(owner, PAYMENT.address)
- *    - approve(PAYMENT.address, amount)
- *    - payTx(..., tokenAddress, amount, deadline, signature)
- *
- * Supported QR formats:
- * 1) JSON (recommended)
- *    {
- *      "merchantId":"0x..(bytes32)",
- *      "orderId":"0x..(bytes32)",
- *      "invoiceId":"0x..(bytes32)",
- *      "amount":"15.00",
- *      "token":"T....",                // TRC20 token address (base58)
- *      "deadline":"0",                 // uint256 string (0 to disable)
- *      "signature":"0x..."             // bytes
- *    }
- *
- * 2) Querystring
- *    merchant_id=0x..&order_id=0x..&invoice_id=0x..&amount=15.00&token=T....&deadline=0&signature=0x...
- *
- * Dependency:
- *   npm i jsqr
- */
-
-const FEE_LIMIT = 150_000_000;
-
-// Minimal TRC20 ABI we need
-const TRC20_ABI = [
-  { name: "decimals", type: "function", stateMutability: "view", inputs: [], outputs: [{ type: "uint8" }] },
-  {
-    name: "allowance",
-    type: "function",
-    stateMutability: "view",
-    inputs: [
-      { name: "owner", type: "address" },
-      { name: "spender", type: "address" },
-    ],
-    outputs: [{ type: "uint256" }],
-  },
-  {
-    name: "approve",
-    type: "function",
-    stateMutability: "nonpayable",
-    inputs: [
-      { name: "spender", type: "address" },
-      { name: "amount", type: "uint256" },
-    ],
-    outputs: [{ type: "bool" }],
-  },
-];
+// import { updateOrderStatus } from "@/lib/backend";
 
 function isBytes32Hex(v) {
   return typeof v === "string" && v.startsWith("0x") && v.length === 66;
 }
 
-function isBytesHex(v) {
-  return typeof v === "string" && v.startsWith("0x") && v.length >= 4 && v.length % 2 === 0;
-}
 
-// Basic base58 Tron address check (good enough for UI validation)
-function isTronBase58Address(v) {
-  return typeof v === "string" && v.startsWith("T") && v.length >= 34 && v.length <= 36;
-}
 
-function parseQRData(text) {
-  const raw = String(text || "").trim();
-  if (!raw) throw new Error("Empty QR data");
+/**
+ * Map backend API response => UI order shape expected by this screen.
+ * Update keys here if your API response differs.
+ */
+function mapApiOrderToUI(api) {
+  console.log({api})
+  return {
+    merchantName: api.merchant_name || "",
+    merchantId: api.merchantId || "",
+    merchantAddress: api.merchant_address || "",
 
-  const normalize = (obj) => {
-    const merchantId = obj.merchantId || obj.merchant_id || "";
-    const orderId = obj.orderId || obj.order_id || "";
-    const invoiceId = obj.invoiceId || obj.invoice_id || "";
-    const amount = obj.amount || obj.price || "";
-    const token = obj.token || ""; // IMPORTANT: address
-    const deadline = obj.deadline ?? "0";
-    const signature = obj.signature || "";
+    orderId: api.orderId || "",
+    invoiceId: api.invoiceId || "",
+    price: String(api.amount ?? api.price ?? ""),
 
-    return {
-      merchantName: obj.merchantName || obj.merchant_name || "",
-      merchantAddress: obj.merchantAddress || obj.merchant_address || "",
-
-      merchantId: String(merchantId).trim(),
-      orderId: String(orderId).trim(),
-      invoiceId: String(invoiceId).trim(),
-      amount: String(amount).trim(),
-      token: String(token).trim(), // token address
-      deadline: String(deadline).trim(),
-      signature: String(signature).trim(),
-    };
+    // token address (base58, starts with "T") returned by backend
+    tokenAddress: api.token || USDT.address,
+    tokenSymbol: (api.token_symbol || "USDT").toUpperCase(),
+    deadline: api.deadline || 0,
+    signature: api.signature || "",
   };
-
-  // JSON
-  if (raw.startsWith("{") && raw.endsWith("}")) return normalize(JSON.parse(raw));
-
-  // URL / querystring
-  const qs = raw.includes("?") ? raw.split("?").slice(1).join("?") : raw;
-  if (qs.includes("=")) {
-    const params = new URLSearchParams(qs);
-    const get = (k) => params.get(k) || params.get(k.toUpperCase()) || "";
-    return normalize({
-      merchant_name: get("merchant_name"),
-      merchant_address: get("merchant_address"),
-      merchant_id: get("merchant_id") || get("merchantId"),
-      order_id: get("order_id") || get("orderId"),
-      invoice_id: get("invoice_id") || get("invoiceId"),
-      amount: get("amount") || get("price"),
-      token: get("token"),
-      deadline: get("deadline"),
-      signature: get("signature"),
-    });
-  }
-
-  throw new Error("Unsupported QR format. Use JSON or querystring.");
-}
-
-async function decodeQRFromImageFile(file) {
-  const jsQR = (await import("jsqr")).default;
-
-  const dataUrl = await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error("Failed to read image"));
-    reader.onload = () => resolve(reader.result);
-    reader.readAsDataURL(file);
-  });
-
-  const img = await new Promise((resolve, reject) => {
-    const i = new Image();
-    i.onload = () => resolve(i);
-    i.onerror = () => reject(new Error("Invalid image"));
-    i.src = dataUrl;
-  });
-
-  const canvas = document.createElement("canvas");
-  const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("Canvas not supported");
-
-  canvas.width = img.naturalWidth || img.width;
-  canvas.height = img.naturalHeight || img.height;
-  ctx.drawImage(img, 0, 0);
-
-  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-  const code = jsQR(imageData.data, imageData.width, imageData.height);
-
-  if (!code?.data) throw new Error("QR not found in image");
-  return String(code.data).trim();
 }
 
 export default function PaymentScreen() {
+  const { orderId } = useParams(); // route: /:orderId
+
+  const API_BASE_URL = import.meta.env.VITE_API_BASE_URL; 
+
   const [busy, setBusy] = useState(false);
   const [log, setLog] = useState("");
   const [wallet, setWallet] = useState(null);
-
-  const [data, setData] = useState(null); // populated by QR
-  const [paymentStatus, setPaymentStatus] = useState("IDLE"); // IDLE | PROCESSING | SUCCESS | FAILED | PENDING
-
-  const fileInputRef = useRef(null);
+  const [order, setOrder] = useState(null);
+  const [paymentStatus, setPaymentStatus] = useState("IDLE");
+  const [loadingOrder, setLoadingOrder] = useState(true);
 
   function logMsg(msg) {
     setLog((l) => (l ? l + "\n" + msg : msg));
   }
 
-  // Optional: URL prefill (if someone opens a link with query params)
+  // 1) Load order details from backend using :orderId
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
+    let alive = true;
 
-    const merchantId = params.get("merchant_id") || "";
-    const orderId = params.get("order_id") || "";
-    const invoiceId = params.get("invoice_id") || "";
-    const amount = params.get("amount") || "";
-    const token = params.get("token") || ""; // token address (base58)
-    const deadline = params.get("deadline") || "0";
-    const signature = params.get("signature") || "";
+    async function load() {
+      try {
+        setLoadingOrder(true);
+        setPaymentStatus("IDLE");
+        setLog("");
 
-    if (merchantId || orderId || invoiceId || amount || token || signature) {
-      setData({
-        merchantName: params.get("merchant_name") || "",
-        merchantAddress: params.get("merchant_address") || "",
-        merchantId,
-        orderId,
-        invoiceId,
-        amount,
-        token,
-        deadline,
-        signature,
-      });
+        if (!orderId) {
+          setOrder(null);
+          logMsg("❌ Missing orderId in route");
+          return;
+        }
+
+        if (!API_BASE_URL) {
+          throw new Error("VITE_API_BASE_URL is not defined in .env");
+        }
+
+        const url = `${API_BASE_URL}/${orderId}`;
+        logMsg(`Fetching order: ${orderId}`);
+        logMsg(`POST ${url}`);
+
+        const res = await fetch(url, {
+          method: "POST",
+          headers: { accept: "application/json" },
+        });
+
+        if (!res.ok) {
+          const text = await res.text().catch(() => "");
+          throw new Error(
+            `Order fetch failed (${res.status}): ${text || res.statusText}`
+          );
+        }
+
+        const apiData = await res.json();
+        const mapped = mapApiOrderToUI(apiData);
+
+        if (!alive) return;
+
+        setOrder(mapped);
+        logMsg("✅ Order loaded");
+        logMsg(JSON.stringify(mapped, null, 2));
+      } catch (err) {
+        if (!alive) return;
+        setOrder(null);
+        logMsg(`❌ Failed to load order: ${err?.message || String(err)}`);
+      } finally {
+        if (alive) setLoadingOrder(false);
+      }
     }
-  }, []);
+
+    load();
+    return () => {
+      alive = false;
+    };
+  }, [orderId, API_BASE_URL]);
 
   const validationError = useMemo(() => {
-    if (!data) return "Upload a QR to load payment data";
+    if (loadingOrder) return "Loading...";
+    if (!order) return "Order not found / failed to load";
 
-    if (!data.amount || Number(data.amount) <= 0) return "Invalid amount";
+    if (!order.price || Number(order.price) <= 0) return "Invalid amount";
 
-    if (!isBytes32Hex(data.merchantId)) return "Invalid merchantId (bytes32)";
-    if (!isBytes32Hex(data.orderId)) return "Invalid orderId (bytes32)";
-    if (!isBytes32Hex(data.invoiceId)) return "Invalid invoiceId (bytes32)";
+    if (!order.deadline || Number(order.deadline) <= 0) return "Missing/invalid deadline";
+    if (!order.signature || !order.signature.startsWith("0x")) return "Missing/invalid signature";
 
-    // ✅ token is address
-    if (!data.token) return "Token address is required";
-    if (!isTronBase58Address(data.token)) return "Invalid token address (TRON base58, starts with T)";
 
-    // deadline can be 0 or positive integer string
-    try {
-      if (data.deadline === "" || data.deadline == null) return "Deadline is required (use 0 to disable)";
-      const d = BigInt(data.deadline);
-      if (d < 0n) return "Deadline must be >= 0";
-    } catch {
-      return "Invalid deadline (must be integer)";
+    if (!isBytes32Hex(order.merchantId)) return "Missing/invalid merchant_id (bytes32)";
+    if (!isBytes32Hex(order.orderId)) return "Missing/invalid order_id (bytes32)";
+    if (!isBytes32Hex(order.invoiceId)) return "Missing/invalid invoice_id (bytes32)";
+
+    if (!order.tokenAddress || typeof order.tokenAddress !== "string") {
+      return "Missing token address";
     }
-
-    if (!data.signature) return "Signature is required";
-    if (!isBytesHex(data.signature)) return "Invalid signature (must be 0x hex bytes)";
 
     return "";
-  }, [data]);
-
-  async function onPickQRFile(e) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    try {
-      setLog("");
-      setPaymentStatus("IDLE");
-
-      logMsg("Decoding QR from image...");
-      const text = await decodeQRFromImageFile(file);
-      logMsg("✅ QR decoded");
-      logMsg(`QR text (preview): ${text.slice(0, 140)}${text.length > 140 ? "..." : ""}`);
-
-      const parsed = parseQRData(text);
-      setData(parsed);
-
-      logMsg("✅ Payment data populated from QR");
-    } catch (err) {
-      console.error(err);
-      logMsg(`❌ QR error: ${err?.message || String(err)}`);
-      setData(null);
-    } finally {
-      e.target.value = "";
-    }
-  }
+  }, [order, loadingOrder]);
 
   async function handlePayWithCrypto() {
-    if (!data) return;
+    if (!order) return;
 
     try {
       setBusy(true);
       setPaymentStatus("PROCESSING");
-      logMsg("-----");
-      logMsg("Starting payment...");
+      setLog("");
 
       if (validationError) {
         logMsg(`❌ ${validationError}`);
@@ -275,55 +152,44 @@ export default function PaymentScreen() {
       assertNetwork(tronWeb, NETWORK);
       logMsg(`Wallet connected: ${address}`);
 
-      // ✅ Token setup: token address comes from QR
-      const tokenAddr = data.token;
-
-      // Build token contract using minimal ABI
-      const token = await getContract(tronWeb, TRC20_ABI, tokenAddr);
-
-      // decimals for correct amountRaw
+      // ---- Token setup (token address from backend) ----
+      // NOTE: using USDT.abi for TRC20 basic calls (decimals/allowance/approve)
+      const token = await getContract(tronWeb, USDT.abi, order.tokenAddress);
       const decimals = Number(await token.decimals().call());
-      const amountRaw = toTokenUnits(data.amount, decimals);
-      const amountRawStr = String(amountRaw);
+      const amountRaw = toTokenUnits(order.price, decimals);
 
-      logMsg(`Token address: ${tokenAddr}`);
-      logMsg(`Decimals: ${decimals}`);
-      logMsg(`Amount: ${data.amount}`);
-      logMsg(`Amount (raw): ${amountRawStr}`);
-      logMsg(`Deadline: ${data.deadline}`);
-      logMsg(`Signature: ${data.signature.slice(0, 14)}...`);
+      logMsg(`Token: ${order.tokenSymbol || "TOKEN"} (${order.tokenAddress})`);
+      logMsg(`Amount: ${order.price}`);
+      logMsg(`Amount (raw): ${amountRaw}`);
 
       // ---- Allowance check ----
       const allowance = await token.allowance(address, PAYMENT.address).call();
       logMsg(`Current allowance: ${allowance}`);
 
-      // ✅ Approval uses tokenAddr (from QR) and approves exact raw amount
-      if (BigInt(allowance) < BigInt(amountRawStr)) {
-        logMsg(`Approval required. Approving exact amount: ${amountRawStr}`);
-        const approveTxid = await token
-          .approve(PAYMENT.address, amountRawStr)
-          .send({ feeLimit: FEE_LIMIT });
-
+      if (BigInt(allowance) < BigInt(amountRaw)) {
+        logMsg("Approval required. Sending approve()...");
+        const approveTxid = await token.approve(PAYMENT.address, amountRaw).send();
         logMsg(`✅ Approve tx: ${approveTxid}`);
       } else {
         logMsg("✅ Sufficient allowance. Skipping approve.");
       }
 
-      // ---- Payment call uses tokenAddr (from QR) ----
+      // ---- Payment call: payTx(bytes32,bytes32,bytes32,address,uint256) ----
       const payment = await getContract(tronWeb, PAYMENT.abi, PAYMENT.address);
 
       logMsg("Calling payTx()...");
-      const txid = await payment
-        .payTx(
-          data.merchantId,
-          data.orderId,
-          data.invoiceId,
-          tokenAddr, // ✅ token from QR
-          amountRawStr,
-          data.deadline,
-          data.signature
-        )
-        .send({ feeLimit: FEE_LIMIT });
+
+      const txBuilder = payment.payTx(
+            order.merchantId,
+            order.orderId,
+            order.invoiceId,
+            order.tokenAddress,
+            amountRaw,
+            order.deadline,
+            order.signature
+        );
+
+      const txid = await txBuilder.send(); // token payment => msg.value=0
 
       logMsg(`✅ Payment txid: ${txid}`);
       logMsg("Waiting for chain confirmation...");
@@ -335,33 +201,31 @@ export default function PaymentScreen() {
 
       logMsg(`Chain status: ${finalStatus}`);
 
-      if (finalStatus === "SUCCESS") {
-        setPaymentStatus("SUCCESS");
-        logMsg("🎉 Payment successful on-chain!");
-      } else if (finalStatus === "FAILED") {
-        setPaymentStatus("FAILED");
-        logMsg("❌ Payment failed on-chain.");
-      } else {
-        setPaymentStatus("PENDING");
+      if (finalStatus === "PENDING") {
         logMsg("⚠️ Still pending. Please refresh later to confirm.");
+        return;
       }
 
-      // Optional: persist locally
-      try {
-        localStorage.setItem(
-          `payment:${txid}`,
-          JSON.stringify({
-            ...data,
-            txid,
-            status: finalStatus,
-            wallet: address,
-            amountRaw: amountRawStr,
-            ts: Date.now(),
-          })
-        );
-      } catch {
-        // ignore
+      // ---- Update backend DB ----
+      logMsg("Updating backend DB...");
+    //   const updated = await updateOrderStatus({
+    //     txid,
+    //     status: finalStatus, // SUCCESS / FAILED
+    //     order_id: order.orderId,
+    //     invoice_id: order.invoiceId,
+    //   });
+
+      console.log({finalStatus})
+
+      if (finalStatus === "SUCCESS") {
+        setPaymentStatus("SUCCESS");
+        logMsg("🎉 Payment successful!");
+      } else {
+        setPaymentStatus("FAILED");
       }
+
+    //   logMsg("✅ Backend updated:");
+    //   logMsg(JSON.stringify(updated, null, 2));
     } catch (err) {
       console.error(err);
       setPaymentStatus("FAILED");
@@ -372,73 +236,57 @@ export default function PaymentScreen() {
   }
 
   return (
-    <div style={{ maxWidth: 760, margin: "0 auto", padding: 24 }}>
-      <h2>Pay With Crypto</h2>
+    <div style={{ maxWidth: 700, margin: "0 auto", padding: 24 }}>
+      <h2>Payment</h2>
 
-      {/* QR Upload */}
+      {/* Order Details */}
       <div style={{ border: "1px solid #ddd", padding: 16, borderRadius: 10 }}>
-        <h3>Upload QR Image</h3>
-        <p style={{ marginTop: 6, opacity: 0.8 }}>
-          QR must contain: merchantId, orderId, invoiceId, amount, <b>token address</b>, deadline, signature
+        <h3>Order Details</h3>
+
+        <p>
+          <b>Order ID (route):</b> {orderId || "-"}
         </p>
 
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept="image/*"
-          onChange={onPickQRFile}
-          disabled={busy}
-        />
-
-        <div style={{ marginTop: 10, fontSize: 12, opacity: 0.8 }}>
-          Recommended QR content: JSON string.
-        </div>
-      </div>
-
-      {/* Details */}
-      <div style={{ border: "1px solid #ddd", padding: 16, borderRadius: 10, marginTop: 16 }}>
-        <h3>Payment Details</h3>
-
-        {!data ? (
-          <p style={{ opacity: 0.8 }}>No data loaded yet. Upload a QR to populate.</p>
-        ) : (
+        {order ? (
           <>
+
             <p>
-              <b>Amount:</b> {data.amount}
+              <b>Amount:</b> {order.price} {order.tokenSymbol || ""}
             </p>
 
             <p style={{ wordBreak: "break-all" }}>
-              <b>Token Address:</b> {data.token}
+              <b>Merchant ID:</b> {order.merchantId}
+            </p>
+            <p style={{ wordBreak: "break-all" }}>
+              <b>Order ID:</b> {order.orderId}
+            </p>
+            <p style={{ wordBreak: "break-all" }}>
+              <b>Invoice ID:</b> {order.invoiceId}
+            </p>
+            
+            <p style={{ wordBreak: "break-all" }}>
+              <b>Token Address:</b> {order.tokenAddress}
             </p>
 
             <p style={{ wordBreak: "break-all" }}>
-              <b>Merchant ID:</b> {data.merchantId}
-            </p>
-            <p style={{ wordBreak: "break-all" }}>
-              <b>Order ID:</b> {data.orderId}
-            </p>
-            <p style={{ wordBreak: "break-all" }}>
-              <b>Invoice ID:</b> {data.invoiceId}
+              <b>Signature:</b> {order.signature}
             </p>
 
-            <p style={{ wordBreak: "break-all" }}>
-              <b>Deadline:</b> {data.deadline}
-            </p>
-            <p style={{ wordBreak: "break-all" }}>
-              <b>Signature:</b> {data.signature}
-            </p>
-
-            {wallet ? (
+            {wallet && (
               <p>
                 <b>Wallet:</b> {shortAddr(wallet)}
               </p>
-            ) : null}
-
-            {validationError ? (
-              <p style={{ marginTop: 10, color: "crimson" }}>⚠️ {validationError}</p>
-            ) : null}
+            )}
           </>
+        ) : (
+          <p style={{ color: "#555" }}>
+            {loadingOrder ? "Loading order details..." : "No order loaded."}
+          </p>
         )}
+
+        {validationError ? (
+          <p style={{ marginTop: 10, color: "crimson" }}>⚠️ {validationError}</p>
+        ) : null}
       </div>
 
       {/* Actions */}
@@ -449,7 +297,7 @@ export default function PaymentScreen() {
 
         <button
           onClick={handlePayWithCrypto}
-          disabled={busy || !!validationError || paymentStatus === "SUCCESS" || !data}
+          disabled={busy || !!validationError || paymentStatus === "SUCCESS"}
           style={{
             background: paymentStatus === "SUCCESS" ? "#16a34a" : "#111",
             color: "#fff",
@@ -458,7 +306,11 @@ export default function PaymentScreen() {
             opacity: busy || validationError ? 0.6 : 1,
           }}
         >
-          {paymentStatus === "SUCCESS" ? "Paid ✅" : busy ? "Processing..." : "Pay with Crypto"}
+          {paymentStatus === "SUCCESS"
+            ? "Paid ✅"
+            : busy
+            ? "Processing..."
+            : "Pay with Crypto"}
         </button>
       </div>
 
@@ -469,7 +321,7 @@ export default function PaymentScreen() {
           padding: 16,
           background: "#f7f7f7",
           borderRadius: 8,
-          minHeight: 140,
+          minHeight: 120,
           whiteSpace: "pre-wrap",
         }}
       >
