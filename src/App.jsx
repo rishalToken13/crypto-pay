@@ -1,6 +1,14 @@
-// src/App.jsx
+import { BrowserRouter, Routes, Route } from "react-router-dom";
 import PaymentScreen from "@/components/PaymentScreen";
 
-export default function App() {
-  return <PaymentScreen />;
+function App() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/:orderId" element={<PaymentScreen />} />
+      </Routes>
+    </BrowserRouter>
+  );
 }
+
+export default App;
