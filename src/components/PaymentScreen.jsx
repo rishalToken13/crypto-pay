@@ -19,20 +19,21 @@ function isBytes32Hex(v) {
  */
 function mapApiOrderToUI(api) {
   console.log({api})
+  const { data } = api
   return {
-    merchantName: api.merchant_name || "",
-    merchantId: api.merchantId || "",
-    merchantAddress: api.merchant_address || "",
+    merchantName: data.merchant_name || "",
+    merchantId: data.merchant_id || "",
+    merchantAddress: data.merchant_address || "",
 
-    orderId: api.orderId || "",
-    invoiceId: api.invoiceId || "",
-    price: String(api.amount ?? api.price ?? ""),
+    orderId: data.order_id || "",
+    invoiceId: data.invoice_id || "",
+    price: String(data.amount ?? data.price ?? ""),
 
     // token address (base58, starts with "T") returned by backend
-    tokenAddress: api.token || USDT.address,
-    tokenSymbol: (api.token_symbol || "USDT").toUpperCase(),
-    deadline: api.deadline || 0,
-    signature: api.signature || "",
+    tokenAddress: data.token || USDT.address,
+    tokenSymbol: (data.token_symbol || "USDT").toUpperCase(),
+    deadline: data.deadline || 0,
+    signature: data.signature || "",
   };
 }
 
